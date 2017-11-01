@@ -1,4 +1,4 @@
-import uuid from 'uuid/v4';
+import * as uuid from 'uuid/v4';
 
 const REQUEST_TYPE = {
 	LOGIN: 'LOGIN',
@@ -7,26 +7,31 @@ const REQUEST_TYPE = {
 };
 
 interface AuthConfig {
-	tenant?: string;
+	tenant: string;
 	clientId: string;
-	redirectUri?: string;
-	instance?: string;
-	endpoints?: string[];
-	loginResource?: string;
+	redirectUri: string;
+	instance: string;
+	endpoints: string[];
+	loginResource: string;
 	callback?: () => void;
 	popUp?: boolean;
-	state?: string;
+	state: string;
 	slice?: string;
-	cacheLocation?: 'localStorage' | 'sessionStorage';
+	cacheLocation: 'localStorage' | 'sessionStorage';
 	extraQueryParameter?: string;
 	localLoginUrl?: string;
 	postLogoutRedirectUri?: string;
 	displayCall?: (url: string) => void;
-	anonymousEndpoints?: string[];
+	anonymousEndpoints: string[];
 	expireOffsetSeconds?: number;
 	correlationId?: string;
 	loadFrameTimeout?: number;
-	navigateToLoginRequestUrl?: boolean;
+	navigateToLoginRequestUrl: boolean;
+}
+
+interface User {
+	userName: string;
+	profile: any;
 }
 
 export default class AuthenticationContext {
@@ -82,20 +87,30 @@ export default class AuthenticationContext {
 	popUp = false;
 	_idTokenNonce: string;
 
-	private _user = null;
-	private _activeRenewals = {};
+	private _user: User | null = null;
+	private _activeRenewals: {
+		[key: string]: string | null;
+	} = {};
 	private _loginInProgress = false;
 	private _acquireTokenInProgress = false;
 
-	constructor(config: AuthConfig) {
+	constructor(config: Partial<AuthConfig>) {
 		(window as any).renewSates = [];
 		(window as any).callBackMappedToRenewState = {};
 		(window as any).callBacksMappedToRenewStates = {};
 
+		const clientId = config.clientId ? config.clientId : 'Must provide clientId';
+
 		this.config = {
 			...config,
+			instance: config.instance ? config.instance : 'https://login.microsoftonline.com/',
+			clientId,
+			endpoints: config.endpoints ? config.endpoints : [],
+			cacheLocation: config.cacheLocation ? config.cacheLocation : 'sessionStorage',
+			tenant: config.tenant ? config.tenant : 'common',
+			state: config.state ? config.state : 'empty',
 			navigateToLoginRequestUrl: config.navigateToLoginRequestUrl ? config.navigateToLoginRequestUrl : true,
-			loginResource: config.loginResource ? config.loginResource : config.clientId,
+			loginResource: config.loginResource ? config.loginResource : clientId,
 			redirectUri: config.redirectUri ? config.redirectUri : window.location.href.split('?')[0].split('#')[0],
 			postLogoutRedirectUri: config.postLogoutRedirectUri
 				? config.postLogoutRedirectUri
@@ -103,9 +118,11 @@ export default class AuthenticationContext {
 			anonymousEndpoints: config.anonymousEndpoints ? config.anonymousEndpoints : []
 		};
 
+		/*
 		if (config.callback) {
 			this.callback = config.callback;
 		}
+		*/
 
 		if (config.instance) {
 			this.instance = config.instance;
@@ -170,7 +187,11 @@ export default class AuthenticationContext {
 		}
 		(window as any).callBackMappedToRenewStates[expectedState].push(callback);
 		if (!(window as any).callBackMappedToRenewStates[expectedState]) {
-			(window as any).callBackMappedToRenewStates[expectedState] = (errorDesc, token, error) => {
+			(window as any).callBackMappedToRenewStates[expectedState] = (
+				errorDesc: string,
+				token: string,
+				error: Error
+			) => {
 				this._activeRenewals[resource] = null;
 
 				for (let i = 0; i < (window as any).callBacksMappedToRenewStates[expectedState].length; ++i) {
@@ -184,7 +205,22 @@ export default class AuthenticationContext {
 		}
 	}
 
-	private _getItem(key) {}
+	private _getItem(itemKey: string): string | null {
+		if (this.config && this.config.cacheLocation && this.config.cacheLocation === 'localStorage') {
+			if (!window.localStorage) {
+				return null;
+			}
+
+			return localStorage.getItem(itemKey);
+		}
+
+		// Default as session storage
+		if (!window.sessionStorage) {
+			return null;
+		}
+
+		return sessionStorage.getItem(itemKey);
+	}
 
 	private _saveItem(itemKey: string, value: string) {
 		if (this.config && this.config.cacheLocation && this.config.cacheLocation === 'localStorage') {
@@ -205,6 +241,7 @@ export default class AuthenticationContext {
 		sessionStorage.setItem(itemKey, value);
 		return true;
 	}
+
 	private _getNavigateUrl(responseType: string, resource: string | null): string {
 		const tenant = this.config.tenant ? this.config.tenant : 'common';
 
@@ -217,7 +254,7 @@ export default class AuthenticationContext {
 		return urlNavigate;
 	}
 
-	private _renewToken(resource, callback) {
+	private _renewToken(resource: string, callback: (errorDesc: string, token: string, error: string) => void) {
 		const frameHandle = this._addAdalFrame('adalRenewFrame' + resource);
 		const expectedState = `${uuid()}|${resource}`;
 		this.config.state = expectedState;
@@ -228,16 +265,14 @@ export default class AuthenticationContext {
 		this._loadFrameTimeout(urlNavigate, 'adalRenewFrame' + resource, resource);
 	}
 
-	private _loadFrameTimeout(urlNavigate, frameName, resource) {
+	private _loadFrameTimeout(urlNavigate: string, frameName: string, resource: string) {
 		this._saveItem(this.CONSTANTS.STORAGE.RENEW_STATUS + resource, this.CONSTANTS.TOKEN_RENEW_STATUS_IN_PROGRESS);
 		this._loadFrame(urlNavigate, frameName);
 
 		setTimeout(() => {
 			if (
-				this._getItem(
-					this.CONSTANTS.STORAGE.RENEW_STATUS + resource,
-					this.CONSTANTS.TOKEN_RENEW_STATUS_IN_PROGRESS
-				)
+				this._getItem(this.CONSTANTS.STORAGE.RENEW_STATUS + resource) ===
+				this.CONSTANTS.TOKEN_RENEW_STATUS_IN_PROGRESS
 			) {
 				const expectedState = this._activeRenewals[resource];
 				if (expectedState && (window as any).callBackMappedToRenewStates[expectedState]) {
@@ -255,7 +290,7 @@ export default class AuthenticationContext {
 		}, this.CONSTANTS.LOADFRAME_TIMEOUT);
 	}
 
-	private _loadFrame(urlNavigate, frameName) {
+	private _loadFrame(urlNavigate: string, frameName: string) {
 		// This trick overcomes iframe navigation in IE
 		// IE does not load the page consistently in iframe
 
@@ -269,7 +304,7 @@ export default class AuthenticationContext {
 		}, 500);
 	}
 
-	private _serialize(responseType, obj: AuthConfig, resource): string {
+	private _serialize(responseType: string, obj: AuthConfig | null, resource: string | null): string {
 		const str = [];
 		if (obj !== null) {
 			str.push(`?response_type=${responseType}`);
@@ -282,11 +317,11 @@ export default class AuthenticationContext {
 			str.push('redirect_uri=' + encodeURIComponent(obj.redirectUri));
 			str.push('state=' + encodeURIComponent(obj.state));
 
-			if (obj.hasOwnProperty('slice')) {
+			if (obj.slice) {
 				str.push('slice=' + encodeURIComponent(obj.slice));
 			}
 
-			if (obj.hasOwnProperty('extraQueryParameter')) {
+			if (obj.extraQueryParameter) {
 				str.push(obj.extraQueryParameter);
 			}
 
@@ -301,7 +336,7 @@ export default class AuthenticationContext {
 
 	private _addHintParameters(urlNavigate: string) {
 		// include hint params only if upn is present
-		if (this._user && this._user.profile && this._user.profile.hasOwnProperty('upn')) {
+		if (this._user != null && this._user.profile && this._user.profile.hasOwnProperty('upn')) {
 			// don't add login_hint twice if user provided it in the extraQueryParameter value
 			if (!this._urlContainsQueryStringParameter('login_hint', urlNavigate)) {
 				// add login_hint
@@ -323,10 +358,6 @@ export default class AuthenticationContext {
 	}
 
 	private _addAdalFrame(iframeId: string): HTMLIFrameElement {
-		if (typeof iframeId === 'undefined') {
-			return;
-		}
-
 		let adalFrame = document.getElementById(iframeId) as HTMLIFrameElement;
 
 		if (!adalFrame) {
@@ -349,15 +380,15 @@ export default class AuthenticationContext {
 					'<iframe name="' + iframeId + '" id="' + iframeId + '" style="display:none"></iframe>'
 				);
 			}
-			if (window.frames && window.frames[iframeId]) {
-				adalFrame = window.frames[iframeId];
+			if ((window as any).frames && (window as any).frames[iframeId]) {
+				adalFrame = (window as any).frames[iframeId];
 			}
 		}
 
 		return adalFrame;
 	}
 
-	private _urlContainsQueryStringParameter(name, url) {
+	private _urlContainsQueryStringParameter(name: string, url: string) {
 		// regex to detect pattern of a ? or & followed by the name parameter and an equals character
 		const regex = new RegExp('[\\?&]' + name + '=');
 		return regex.test(url);
